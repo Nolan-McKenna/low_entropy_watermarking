@@ -110,10 +110,18 @@ def main():
     model, tokenizer = load_model_and_tokenizer(MODEL_NAME, args.device)
     vocab_size = len(tokenizer)
 
-    watermark_processor = WatermarkLogitsProcessor(
+    fixed_processor = WatermarkLogitsProcessor(
         vocab_size=vocab_size,
         gamma=args.gamma,
         delta=args.delta,
+        adaptive=False,
+        hash_key=HASH_KEY,
+    )
+    adaptive_processor = WatermarkLogitsProcessor(
+        vocab_size=vocab_size,
+        gamma=args.gamma,
+        delta=args.delta,
+        adaptive=True,
         hash_key=HASH_KEY,
     )
 
@@ -123,8 +131,9 @@ def main():
     for i, (prompt_text, prompt_ids) in enumerate(prompt_stream):
         print(f"[{i+1}/{args.num_samples}] generating …", end="\r")
 
-        nw_tokens = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device)
-        w_tokens = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device, watermark_processor)
+        nw_tokens  = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device)
+        w_tokens   = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device, fixed_processor)
+        adp_tokens = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device, adaptive_processor)
 
         results.append({
             "idx": i,
@@ -132,8 +141,10 @@ def main():
             "prompt_ids": prompt_ids,
             "no_watermark_tokens": nw_tokens,
             "watermarked_tokens": w_tokens,
-            "no_watermark_text": tokenizer.decode(nw_tokens, skip_special_tokens=True),
-            "watermarked_text": tokenizer.decode(w_tokens, skip_special_tokens=True),
+            "adaptive_tokens": adp_tokens,
+            "no_watermark_text": tokenizer.decode(nw_tokens,  skip_special_tokens=True),
+            "watermarked_text":  tokenizer.decode(w_tokens,   skip_special_tokens=True),
+            "adaptive_text":     tokenizer.decode(adp_tokens, skip_special_tokens=True),
             "gamma": args.gamma,
             "delta": args.delta,
         })

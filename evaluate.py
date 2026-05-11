@@ -107,54 +107,75 @@ def main():
         ).to(args.device)
         oracle_model.eval()
 
-    nw_zscores, w_zscores = [], []
-    nw_ppls, w_ppls = [], []
+    nw_zscores, w_zscores, adp_zscores = [], [], []
+    nw_ppls, w_ppls, adp_ppls = [], [], []
+    has_adaptive = "adaptive_tokens" in records[0]
 
     for i, rec in enumerate(records):
-        nw_res = detector.detect(rec["no_watermark_tokens"])
-        w_res = detector.detect(rec["watermarked_tokens"])
+        nw_res  = detector.detect(rec["no_watermark_tokens"])
+        w_res   = detector.detect(rec["watermarked_tokens"])
         nw_zscores.append(nw_res["z_score"])
         w_zscores.append(w_res["z_score"])
+
+        if has_adaptive:
+            adp_res = detector.detect(rec["adaptive_tokens"])
+            adp_zscores.append(adp_res["z_score"])
 
         if oracle_model is not None:
             prompt_ids = rec["prompt_ids"]
             nw_ppls.append(compute_perplexity(prompt_ids, rec["no_watermark_tokens"], oracle_model, args.device))
             w_ppls.append(compute_perplexity(prompt_ids, rec["watermarked_tokens"], oracle_model, args.device))
+            if has_adaptive:
+                adp_ppls.append(compute_perplexity(prompt_ids, rec["adaptive_tokens"], oracle_model, args.device))
 
         if (i + 1) % 50 == 0:
             print(f"  scored {i+1}/{len(records)}")
 
-    nw_zscores = np.array(nw_zscores)
-    w_zscores = np.array(w_zscores)
+    nw_zscores  = np.array(nw_zscores)
+    w_zscores   = np.array(w_zscores)
+    adp_zscores = np.array(adp_zscores) if adp_zscores else None
 
     # --- Detection accuracy at threshold ---
-    tpr = np.mean(w_zscores > Z_THRESHOLD)
-    fpr = np.mean(nw_zscores > Z_THRESHOLD)
-    fnr = 1 - tpr
+    tpr     = np.mean(w_zscores   > Z_THRESHOLD)
+    fpr     = np.mean(nw_zscores  > Z_THRESHOLD)
+    fnr     = 1 - tpr
+    adp_tpr = float(np.mean(adp_zscores > Z_THRESHOLD)) if adp_zscores is not None else None
     print(f"\n=== Watermark detection (z > {Z_THRESHOLD}) ===")
-    print(f"  TPR (watermarked detected):     {tpr:.3f}")
-    print(f"  FPR (human text false-positive):{fpr:.3f}")
-    print(f"  FNR (watermarked missed):       {fnr:.3f}")
+    print(f"  TPR fixed (watermarked detected):    {tpr:.3f}")
+    print(f"  TPR adaptive:                        {adp_tpr:.3f}" if adp_tpr is not None else "")
+    print(f"  FPR (human text false-positive):     {fpr:.3f}")
+    print(f"  FNR fixed:                           {fnr:.3f}")
 
     # --- Z-score summary ---
     print(f"\n=== Z-score statistics ===")
     print(f"  No-watermark  mean={nw_zscores.mean():.2f}  std={nw_zscores.std():.2f}")
-    print(f"  Watermarked   mean={w_zscores.mean():.2f}  std={w_zscores.std():.2f}")
+    print(f"  Fixed δ       mean={w_zscores.mean():.2f}  std={w_zscores.std():.2f}")
+    if adp_zscores is not None:
+        print(f"  Adaptive δ    mean={adp_zscores.mean():.2f}  std={adp_zscores.std():.2f}")
 
     # --- ROC / AUC ---
     labels = np.array([0] * len(nw_zscores) + [1] * len(w_zscores))
     scores = np.concatenate([nw_zscores, w_zscores])
     auc = roc_auc_score(labels, scores)
+    adp_auc = None
+    if adp_zscores is not None:
+        adp_labels = np.array([0] * len(nw_zscores) + [1] * len(adp_zscores))
+        adp_auc = roc_auc_score(adp_labels, np.concatenate([nw_zscores, adp_zscores]))
     print(f"\n=== ROC AUC ===")
-    print(f"  AUC: {auc:.4f}")
+    print(f"  Fixed δ:    {auc:.4f}")
+    if adp_auc is not None:
+        print(f"  Adaptive δ: {adp_auc:.4f}")
 
     # --- Perplexity ---
     if oracle_model is not None:
-        nw_ppls = np.array(nw_ppls)
-        w_ppls = np.array(w_ppls)
+        nw_ppls  = np.array(nw_ppls)
+        w_ppls   = np.array(w_ppls)
+        adp_ppls = np.array(adp_ppls) if adp_ppls else None
         print(f"\n=== Oracle Perplexity (OPT-2.7B) ===")
         print(f"  No-watermark  mean={np.nanmean(nw_ppls):.2f}")
-        print(f"  Watermarked   mean={np.nanmean(w_ppls):.2f}")
+        print(f"  Fixed δ       mean={np.nanmean(w_ppls):.2f}")
+        if adp_ppls is not None:
+            print(f"  Adaptive δ    mean={np.nanmean(adp_ppls):.2f}")
 
     # Save summary
     summary = {
@@ -163,10 +184,15 @@ def main():
         "fnr": float(fnr),
         "auc": float(auc),
         "nw_z_mean": float(nw_zscores.mean()),
-        "nw_z_std": float(nw_zscores.std()),
-        "w_z_mean": float(w_zscores.mean()),
-        "w_z_std": float(w_zscores.std()),
+        "nw_z_std":  float(nw_zscores.std()),
+        "w_z_mean":  float(w_zscores.mean()),
+        "w_z_std":   float(w_zscores.std()),
     }
+    if adp_zscores is not None:
+        summary["adp_tpr"]    = float(adp_tpr)
+        summary["adp_auc"]    = float(adp_auc)
+        summary["adp_z_mean"] = float(adp_zscores.mean())
+        summary["adp_z_std"]  = float(adp_zscores.std())
     if oracle_model is not None:
         summary["nw_ppl_mean"] = float(np.nanmean(nw_ppls))
         summary["w_ppl_mean"] = float(np.nanmean(w_ppls))

@@ -11,6 +11,7 @@ implemented here verbatim. The entropy-aware extension described in
 the CS5788 project proposal is a separate subclass.
 """
 
+import math
 import torch
 from transformers import LogitsProcessor
 
@@ -40,12 +41,14 @@ class WatermarkLogitsProcessor(LogitsProcessor):
         vocab_size: int,
         gamma: float = 0.25,
         delta: float = 2.0,
+        adaptive: bool = False,
         seeding_scheme: str = "lefthash",
         hash_key: int = 15485863,  # the millionth prime
     ):
         self.vocab_size = vocab_size
         self.gamma = gamma
         self.delta = delta
+        self.adaptive = adaptive
         self.seeding_scheme = seeding_scheme
         self.hash_key = hash_key
         self.rng = torch.Generator()
@@ -60,6 +63,28 @@ class WatermarkLogitsProcessor(LogitsProcessor):
         vocab_perm = torch.randperm(self.vocab_size, generator=self.rng)
         return vocab_perm[:green_list_size]
 
+    def _normalized_entropy(self, logits: torch.Tensor) -> float:
+        """
+        Compute Shannon entropy of the token distribution, normalized to [0, 1].
+
+        logits: raw scores for one token step, shape (vocab_size,)
+        Returns 0.0 at minimum entropy (one token has all mass),
+                1.0 at maximum entropy (uniform distribution).
+        """
+        probs = torch.softmax(logits, dim=-1)
+        # clamp avoids log(0); negligible effect since p*log(p) → 0 as p → 0
+        entropy = -torch.sum(probs * torch.log(probs.clamp(min=1e-10)))
+        max_entropy = math.log(self.vocab_size)
+        return float(entropy.item() / max_entropy)
+
+    def _adaptive_delta(self, logits: torch.Tensor) -> float:
+        """
+        Scale delta linearly with normalized entropy.
+        High entropy → delta_max.
+        Low entropy → ~0.
+        """
+        return self.delta * self._normalized_entropy(logits)
+
     def __call__(
         self, input_ids: torch.LongTensor, scores: torch.FloatTensor
     ) -> torch.FloatTensor:
@@ -68,7 +93,9 @@ class WatermarkLogitsProcessor(LogitsProcessor):
         for b in range(batch_size):
             prev_token = int(input_ids[b, -1].item())
             green_list = self._get_green_list(prev_token)
-            scores[b, green_list] += self.delta
+            # Depending on flag, add regular delta or adaptive delta
+            bias = self._adaptive_delta(scores[b]) if self.adaptive else self.delta
+            scores[b, green_list] += bias
         return scores
 
 
