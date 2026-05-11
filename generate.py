@@ -16,7 +16,7 @@ import torch
 from datasets import load_dataset
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from watermark import WatermarkLogitsProcessor
+from watermark import WatermarkLogitsProcessor, WatermarkDetector
 
 # Paper defaults
 MODEL_NAME = "facebook/opt-1.3b"
@@ -82,6 +82,50 @@ def stream_c4_prompts(tokenizer, prompt_length: int, num_samples: int):
 
 
 @torch.inference_mode()
+def generate_until_detected(
+    model,
+    prompt_ids: list[int],
+    processor: WatermarkLogitsProcessor,
+    detector: WatermarkDetector,
+    max_tokens: int = 800,
+    min_check: int = 20,
+    device: str = "cpu",
+) -> list[int]:
+    """
+    Generate tokens one-by-one until the running z-score exceeds the detector
+    threshold or max_tokens is reached. Uses KV cache for efficiency.
+    """
+    all_ids = list(prompt_ids)
+    generated = []
+    past_key_values = None
+
+    for _ in range(max_tokens):
+        if past_key_values is None:
+            input_tensor = torch.tensor([all_ids], dtype=torch.long, device=device)
+        else:
+            input_tensor = torch.tensor([[all_ids[-1]]], dtype=torch.long, device=device)
+
+        out = model(input_tensor, past_key_values=past_key_values, use_cache=True)
+        past_key_values = out.past_key_values
+        logits = out.logits[:, -1, :]  # (1, vocab_size)
+
+        # Processor reads input_ids[:, -1] as the previous token
+        context_tensor = torch.tensor([all_ids], dtype=torch.long, device=device)
+        logits = processor(context_tensor, logits)
+
+        probs = torch.softmax(logits, dim=-1)
+        next_token = int(torch.multinomial(probs[0], num_samples=1).item())
+
+        all_ids.append(next_token)
+        generated.append(next_token)
+
+        if len(generated) >= min_check and detector.detect(generated)["is_watermarked"]:
+            break
+
+    return generated
+
+
+@torch.inference_mode()
 def generate_one(
     model,
     tokenizer,
@@ -124,6 +168,12 @@ def main():
         adaptive=True,
         hash_key=HASH_KEY,
     )
+    detector = WatermarkDetector(
+        vocab_size=vocab_size,
+        gamma=args.gamma,
+        hash_key=HASH_KEY,
+        z_threshold=4.0,
+    )
 
     results = []
     prompt_stream = stream_c4_prompts(tokenizer, args.prompt_length, args.num_samples)
@@ -131,20 +181,25 @@ def main():
     for i, (prompt_text, prompt_ids) in enumerate(prompt_stream):
         print(f"[{i+1}/{args.num_samples}] generating …", end="\r")
 
-        nw_tokens  = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device)
-        w_tokens   = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device, fixed_processor)
-        adp_tokens = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device, adaptive_processor)
+        nw_tokens     = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device)
+        w_tokens      = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device, fixed_processor)
+        adp_tokens    = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device, adaptive_processor)
+        forced_tokens = generate_until_detected(model, prompt_ids, fixed_processor, detector,
+                                                max_tokens=args.target_length * 4,
+                                                device=args.device)
 
         results.append({
             "idx": i,
             "prompt": prompt_text,
             "prompt_ids": prompt_ids,
             "no_watermark_tokens": nw_tokens,
-            "watermarked_tokens": w_tokens,
-            "adaptive_tokens": adp_tokens,
-            "no_watermark_text": tokenizer.decode(nw_tokens,  skip_special_tokens=True),
-            "watermarked_text":  tokenizer.decode(w_tokens,   skip_special_tokens=True),
-            "adaptive_text":     tokenizer.decode(adp_tokens, skip_special_tokens=True),
+            "watermarked_tokens":  w_tokens,
+            "adaptive_tokens":     adp_tokens,
+            "forced_tokens":       forced_tokens,
+            "no_watermark_text": tokenizer.decode(nw_tokens,     skip_special_tokens=True),
+            "watermarked_text":  tokenizer.decode(w_tokens,      skip_special_tokens=True),
+            "adaptive_text":     tokenizer.decode(adp_tokens,    skip_special_tokens=True),
+            "forced_text":       tokenizer.decode(forced_tokens,  skip_special_tokens=True),
             "gamma": args.gamma,
             "delta": args.delta,
         })
