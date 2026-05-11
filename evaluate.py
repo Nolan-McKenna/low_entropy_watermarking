@@ -41,11 +41,22 @@ def parse_args():
 # ---------------------------------------------------------------------------
 
 @torch.inference_mode()
-def compute_perplexity(token_ids: list[int], model, device: str) -> float:
-    if len(token_ids) < 2:
+def compute_perplexity(
+    prompt_ids: list[int], generated_ids: list[int], model, device: str
+) -> float:
+    """
+    Compute oracle perplexity on generated_ids given prompt_ids as context.
+    Loss is computed only over the generated tokens, matching Appendix A.2
+    of Kirchenbauer et al.
+    """
+    if len(generated_ids) < 1:
         return float("nan")
-    input_ids = torch.tensor([token_ids], dtype=torch.long).to(device)
-    labels = input_ids.clone()
+    full_ids = prompt_ids + generated_ids
+    input_ids = torch.tensor([full_ids], dtype=torch.long).to(device)
+    # -100 tells the model to ignore prompt positions when computing loss
+    labels = torch.tensor(
+        [[-100] * len(prompt_ids) + generated_ids], dtype=torch.long
+    ).to(device)
     out = model(input_ids, labels=labels)
     return float(torch.exp(out.loss).item())
 
@@ -106,8 +117,9 @@ def main():
         w_zscores.append(w_res["z_score"])
 
         if oracle_model is not None:
-            nw_ppls.append(compute_perplexity(rec["no_watermark_tokens"], oracle_model, args.device))
-            w_ppls.append(compute_perplexity(rec["watermarked_tokens"], oracle_model, args.device))
+            prompt_ids = rec["prompt_ids"]
+            nw_ppls.append(compute_perplexity(prompt_ids, rec["no_watermark_tokens"], oracle_model, args.device))
+            w_ppls.append(compute_perplexity(prompt_ids, rec["watermarked_tokens"], oracle_model, args.device))
 
         if (i + 1) % 50 == 0:
             print(f"  scored {i+1}/{len(records)}")

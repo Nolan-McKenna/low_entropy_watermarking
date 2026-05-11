@@ -129,6 +129,7 @@ def main():
         results.append({
             "idx": i,
             "prompt": prompt_text,
+            "prompt_ids": prompt_ids,
             "no_watermark_tokens": nw_tokens,
             "watermarked_tokens": w_tokens,
             "no_watermark_text": tokenizer.decode(nw_tokens, skip_special_tokens=True),
