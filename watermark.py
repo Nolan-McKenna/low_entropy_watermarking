@@ -71,8 +71,8 @@ class WatermarkLogitsProcessor(LogitsProcessor):
         Returns 0.0 at minimum entropy (one token has all mass),
                 1.0 at maximum entropy (uniform distribution).
         """
-        probs = torch.softmax(logits, dim=-1)
-        # clamp avoids log(0); negligible effect since p*log(p) → 0 as p → 0
+        # cast to float32 — float16 softmax overflows on GPU with large logit magnitudes
+        probs = torch.softmax(logits.float(), dim=-1)
         entropy = -torch.sum(probs * torch.log(probs.clamp(min=1e-10)))
         max_entropy = math.log(self.vocab_size)
         return float(entropy.item() / max_entropy)
