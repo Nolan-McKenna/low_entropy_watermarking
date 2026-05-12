@@ -190,23 +190,29 @@ def main():
         nw_tokens     = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device)
         w_tokens      = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device, fixed_processor)
         adp_tokens    = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device, adaptive_processor)
-        forced_tokens = generate_until_detected(model, prompt_ids, fixed_processor, detector,
-                                                max_tokens=args.target_length * 4,
-                                                eos_token_id=tokenizer.eos_token_id,
-                                                device=args.device)
+        forced_tokens     = generate_until_detected(model, prompt_ids, fixed_processor, detector,
+                                                    max_tokens=args.target_length * 4,
+                                                    eos_token_id=tokenizer.eos_token_id,
+                                                    device=args.device)
+        forced_adp_tokens = generate_until_detected(model, prompt_ids, adaptive_processor, detector,
+                                                    max_tokens=args.target_length * 4,
+                                                    eos_token_id=tokenizer.eos_token_id,
+                                                    device=args.device)
 
         results.append({
             "idx": i,
             "prompt": prompt_text,
             "prompt_ids": prompt_ids,
-            "no_watermark_tokens": nw_tokens,
-            "watermarked_tokens":  w_tokens,
-            "adaptive_tokens":     adp_tokens,
-            "forced_tokens":       forced_tokens,
-            "no_watermark_text": tokenizer.decode(nw_tokens,     skip_special_tokens=True),
-            "watermarked_text":  tokenizer.decode(w_tokens,      skip_special_tokens=True),
-            "adaptive_text":     tokenizer.decode(adp_tokens,    skip_special_tokens=True),
-            "forced_text":       tokenizer.decode(forced_tokens,  skip_special_tokens=True),
+            "no_watermark_tokens":  nw_tokens,
+            "watermarked_tokens":   w_tokens,
+            "adaptive_tokens":      adp_tokens,
+            "forced_tokens":        forced_tokens,
+            "forced_adp_tokens":    forced_adp_tokens,
+            "no_watermark_text": tokenizer.decode(nw_tokens,         skip_special_tokens=True),
+            "watermarked_text":  tokenizer.decode(w_tokens,          skip_special_tokens=True),
+            "adaptive_text":     tokenizer.decode(adp_tokens,        skip_special_tokens=True),
+            "forced_text":       tokenizer.decode(forced_tokens,     skip_special_tokens=True),
+            "forced_adp_text":   tokenizer.decode(forced_adp_tokens, skip_special_tokens=True),
             "gamma": args.gamma,
             "delta": args.delta,
         })
