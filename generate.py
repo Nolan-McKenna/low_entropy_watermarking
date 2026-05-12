@@ -195,7 +195,7 @@ def main():
                                                     eos_token_id=tokenizer.eos_token_id,
                                                     device=args.device)
         forced_adp_tokens = generate_until_detected(model, prompt_ids, adaptive_processor, detector,
-                                                    max_tokens=args.target_length * 4,
+                                                    max_tokens=args.target_length * 2,
                                                     eos_token_id=tokenizer.eos_token_id,
                                                     device=args.device)
 
