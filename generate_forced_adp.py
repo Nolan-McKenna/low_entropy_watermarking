@@ -64,6 +64,7 @@ def main():
         gamma=gamma,
         delta=delta,
         adaptive=True,
+        alpha=0.5,  # sqrt scaling — more aggressive at low entropy than linear
         hash_key=HASH_KEY,
     )
     detector = WatermarkDetector(

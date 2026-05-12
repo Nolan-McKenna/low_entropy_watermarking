@@ -42,6 +42,7 @@ class WatermarkLogitsProcessor(LogitsProcessor):
         gamma: float = 0.25,
         delta: float = 2.0,
         adaptive: bool = False,
+        alpha: float = 1.0,
         seeding_scheme: str = "lefthash",
         hash_key: int = 15485863,  # the millionth prime
     ):
@@ -49,6 +50,7 @@ class WatermarkLogitsProcessor(LogitsProcessor):
         self.gamma = gamma
         self.delta = delta
         self.adaptive = adaptive
+        self.alpha = alpha  # exponent for entropy scaling: δ = δ_max * H^alpha
         self.seeding_scheme = seeding_scheme
         self.hash_key = hash_key
         self.rng = torch.Generator()
@@ -79,11 +81,11 @@ class WatermarkLogitsProcessor(LogitsProcessor):
 
     def _adaptive_delta(self, logits: torch.Tensor) -> float:
         """
-        Scale delta linearly with normalized entropy.
-        High entropy → delta_max.
-        Low entropy → ~0.
+        Scale delta with normalized entropy raised to alpha.
+        alpha=1.0 → linear (default adaptive).
+        alpha<1.0 → concave, more aggressive at low entropy (used for forced_adp).
         """
-        return self.delta * self._normalized_entropy(logits)
+        return self.delta * (self._normalized_entropy(logits) ** self.alpha)
 
     def __call__(
         self, input_ids: torch.LongTensor, scores: torch.FloatTensor
