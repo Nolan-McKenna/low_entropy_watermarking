@@ -89,15 +89,18 @@ def generate_until_detected(
     detector: WatermarkDetector,
     max_tokens: int = 800,
     min_check: int = 20,
+    eos_token_id: int = None,
     device: str = "cpu",
 ) -> list[int]:
     """
-    Generate tokens one-by-one until the running z-score exceeds the detector
-    threshold or max_tokens is reached. Uses KV cache for efficiency.
+    Generate tokens until BOTH the z-score threshold is crossed AND an EOS token
+    is produced (whichever comes last), or max_tokens is reached.
+    Waiting for EOS avoids cutting off mid-sentence, which would inflate PPL.
     """
     all_ids = list(prompt_ids)
     generated = []
     past_key_values = None
+    threshold_hit = False
 
     for _ in range(max_tokens):
         if past_key_values is None:
@@ -109,7 +112,6 @@ def generate_until_detected(
         past_key_values = out.past_key_values
         logits = out.logits[:, -1, :]  # (1, vocab_size)
 
-        # Processor reads input_ids[:, -1] as the previous token
         context_tensor = torch.tensor([all_ids], dtype=torch.long, device=device)
         logits = processor(context_tensor, logits)
 
@@ -119,7 +121,11 @@ def generate_until_detected(
         all_ids.append(next_token)
         generated.append(next_token)
 
-        if len(generated) >= min_check and detector.detect(generated)["is_watermarked"]:
+        if len(generated) >= min_check:
+            threshold_hit = threshold_hit or detector.detect(generated)["is_watermarked"]
+
+        eos_hit = (eos_token_id is not None and next_token == eos_token_id)
+        if threshold_hit and (eos_hit or eos_token_id is None):
             break
 
     return generated
@@ -186,6 +192,7 @@ def main():
         adp_tokens    = generate_one(model, tokenizer, prompt_ids, args.target_length, args.device, adaptive_processor)
         forced_tokens = generate_until_detected(model, prompt_ids, fixed_processor, detector,
                                                 max_tokens=args.target_length * 4,
+                                                eos_token_id=tokenizer.eos_token_id,
                                                 device=args.device)
 
         results.append({
