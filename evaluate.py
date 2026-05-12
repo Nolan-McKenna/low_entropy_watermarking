@@ -224,6 +224,11 @@ def main():
         summary["w_ppl_mean"]  = float(np.nanmean(w_ppls))
         if adp_ppls    is not None: summary["adp_ppl_mean"]    = float(np.nanmean(adp_ppls))
         if forced_ppls is not None: summary["forced_ppl_mean"] = float(np.nanmean(forced_ppls))
+        # Per-record arrays for entropy-split analysis in the notebook
+        summary["nw_ppls"]     = [float(x) for x in nw_ppls]
+        summary["w_ppls"]      = [float(x) for x in w_ppls]
+        if adp_ppls    is not None: summary["adp_ppls"]    = [float(x) for x in adp_ppls]
+        if forced_ppls is not None: summary["forced_ppls"] = [float(x) for x in forced_ppls]
 
     out_path = Path(args.input_file).with_suffix(".eval.json")
     with open(out_path, "w") as f:
