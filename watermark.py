@@ -43,6 +43,7 @@ class WatermarkLogitsProcessor(LogitsProcessor):
         delta: float = 2.0,
         adaptive: bool = False,
         alpha: float = 1.0,
+        delta_min: float = 0.0,
         seeding_scheme: str = "lefthash",
         hash_key: int = 15485863,  # the millionth prime
     ):
@@ -50,7 +51,8 @@ class WatermarkLogitsProcessor(LogitsProcessor):
         self.gamma = gamma
         self.delta = delta
         self.adaptive = adaptive
-        self.alpha = alpha  # exponent for entropy scaling: δ = δ_max * H^alpha
+        self.alpha = alpha        # exponent for entropy scaling: δ = δ_max * H^alpha
+        self.delta_min = delta_min  # floor to guarantee z-score accumulation
         self.seeding_scheme = seeding_scheme
         self.hash_key = hash_key
         self.rng = torch.Generator()
@@ -79,13 +81,14 @@ class WatermarkLogitsProcessor(LogitsProcessor):
         max_entropy = math.log(self.vocab_size)
         return float(entropy.item() / max_entropy)
 
-    def _adaptive_delta(self, logits: torch.Tensor) -> float:
+    def _adaptive_delta(self, logits: torch.Tensor, delta_min: float = 0.0) -> float:
         """
-        Scale delta with normalized entropy raised to alpha.
+        Scale delta with normalized entropy raised to alpha, with optional floor.
         alpha=1.0 → linear (default adaptive).
-        alpha<1.0 → concave, more aggressive at low entropy (used for forced_adp).
+        alpha<1.0 → concave, more aggressive at low entropy.
+        delta_min  → floor so z-score always accumulates (used for forced_adp).
         """
-        return self.delta * (self._normalized_entropy(logits) ** self.alpha)
+        return max(self.delta * (self._normalized_entropy(logits) ** self.alpha), delta_min)
 
     def __call__(
         self, input_ids: torch.LongTensor, scores: torch.FloatTensor
@@ -96,7 +99,7 @@ class WatermarkLogitsProcessor(LogitsProcessor):
             prev_token = int(input_ids[b, -1].item())
             green_list = self._get_green_list(prev_token)
             # Depending on flag, add regular delta or adaptive delta
-            bias = self._adaptive_delta(scores[b]) if self.adaptive else self.delta
+            bias = self._adaptive_delta(scores[b], self.delta_min) if self.adaptive else self.delta
             scores[b, green_list] += bias
         return scores
 

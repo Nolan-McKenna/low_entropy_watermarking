@@ -59,12 +59,17 @@ def main():
     vocab_size = len(tokenizer)
     target_length = len(records[0]["watermarked_tokens"])  # infer from existing data
 
+    ALPHA     = 0.5
+    DELTA_MIN = 1.0
+    print(f"Config: alpha={ALPHA}  delta_min={DELTA_MIN}  max_tokens={target_length * 2}")
+
     adaptive_processor = WatermarkLogitsProcessor(
         vocab_size=vocab_size,
         gamma=gamma,
         delta=delta,
         adaptive=True,
-        alpha=0.5,  # sqrt scaling — more aggressive at low entropy than linear
+        alpha=ALPHA,
+        delta_min=DELTA_MIN,
         hash_key=HASH_KEY,
     )
     detector = WatermarkDetector(
@@ -74,8 +79,8 @@ def main():
         z_threshold=4.0,
     )
 
+    lengths = []
     for i, rec in enumerate(records):
-        print(f"[{i+1}/{len(records)}] generating forced_adp …", end="\r")
         forced_adp_tokens = generate_until_detected(
             model,
             rec["prompt_ids"],
@@ -87,12 +92,19 @@ def main():
         )
         rec["forced_adp_tokens"] = forced_adp_tokens
         rec["forced_adp_text"]   = tokenizer.decode(forced_adp_tokens, skip_special_tokens=True)
+        lengths.append(len(forced_adp_tokens))
+
+        if (i + 1) % 10 == 0 or i == 0:
+            avg_len = sum(lengths) / len(lengths)
+            z = detector.detect(forced_adp_tokens)["z_score"]
+            print(f"[{i+1}/{len(records)}]  len={len(forced_adp_tokens)}  z={z:.2f}  avg_len={avg_len:.1f}")
 
     with open(args.input_file, "w") as f:
         for rec in records:
             f.write(json.dumps(rec) + "\n")
 
-    print(f"\nDone — wrote forced_adp_tokens for {len(records)} records to {args.input_file}")
+    print(f"\nDone — {len(records)} records written to {args.input_file}")
+    print(f"Forced-adp avg length: {sum(lengths)/len(lengths):.1f} tokens")
 
 
 if __name__ == "__main__":
